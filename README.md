@@ -11,4 +11,4 @@ Example:
 
 ![mandelbrot](https://user-images.githubusercontent.com/60831107/148019773-79170c86-2e41-4483-8ff3-d08d0dd33845.jpg)
 
-![mandelbrot_ascii](https://user-images.githubusercontent.com/60831107/148019837-34387f0d-e090-4701-94e0-8c39bdbda42a.png)
+![mandelbrot_ascii](https://user-images.githubusercontent.com/60831107/148019945-4c221417-b0b6-4f65-883c-666ff3244262.png)
