@@ -9,6 +9,6 @@ Get better results by increasing contrast, removing the background from the subj
 
 Example:
 
-![burymeqr](https://user-images.githubusercontent.com/60831107/148006445-a1a795fc-0e55-4a17-9216-75667fe16970.png)
+![mandelbrot](https://user-images.githubusercontent.com/60831107/148019773-79170c86-2e41-4483-8ff3-d08d0dd33845.jpg)
 
-![qr_ascii](https://user-images.githubusercontent.com/60831107/148006455-f318ac4a-7651-460d-a30a-6f0ba2f174d5.png)
+![mandelbrot_ascii](https://user-images.githubusercontent.com/60831107/148019837-34387f0d-e090-4701-94e0-8c39bdbda42a.png)
