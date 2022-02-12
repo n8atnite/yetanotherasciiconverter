@@ -4,7 +4,7 @@ import numpy as np
 
 MAXWIDTH = 80 # number of characters per line
 STYLEBIAS = 2.5 # adjust aspect ratio based on font and line formatting (terminal-dependent)
-ascii_map = ".^,:;Il!i~+_-?][}{1)(|/tfjrxnuvczXYUJCLQ0OZmwqpdbkhao*#MW&8%B@$" # revised from https://stackoverflow.com/a/66140774 without escape-chars
+ascii_map = " .^,:;Il!i~+_-?][}{1)(|/tfjrxnuvczXYUJCLQ0OZmwqpdbkhao*#MW&8%B@$" # revised from https://stackoverflow.com/a/66140774 without escape-chars
 normalize = lambda x: ((x/255)*(len(ascii_map)-1)).astype(int)
 resize = lambda y: y.resize((MAXWIDTH,round(MAXWIDTH/(STYLEBIAS*(y.size[0]/y.size[1])))))
 
