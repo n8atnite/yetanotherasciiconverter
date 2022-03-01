@@ -11,7 +11,7 @@ Example:
 
 ![mandelbrot_ascii](https://user-images.githubusercontent.com/60831107/148019945-4c221417-b0b6-4f65-883c-666ff3244262.png)
 
-Example video: 
+Example video ([original](https://www.youtube.com/watch?v=Fy-O8TsVHAc)): 
 
 https://user-images.githubusercontent.com/60831107/156263347-31d192b2-a2c5-4b2e-92aa-ba0b1ebf34df.mp4
 
