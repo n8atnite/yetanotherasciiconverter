@@ -21,12 +21,7 @@ OUTNAME = 'out.mp4'
 FONTS_PATH = '/usr/share/fonts/truetype/ubuntu/'
 FONT = 'Ubuntu-M.ttf'
 VALID_EXTS = ('.mp4', '.m4v', '.avi')
-RES_X = 128
-RES_Y = 72
 CHAR_SCALE = 0.1
-CHAR_PIXEL_SIZE = 10
-OUTRES = (RES_Y*CHAR_PIXEL_SIZE,RES_X*CHAR_PIXEL_SIZE)
-FPS = 24
 
 # https://docs.opencv.org/3.4/d4/d15/group__videoio__flags__base.html#gaeb8dd9c89c10a5c63c139bf7c4f5704d
 
@@ -36,28 +31,30 @@ normalize = lambda x: ((x/255)*(len(ascii_map)-1)).astype(np.uint8)
 def get_font(fontpath, basesize):
     return imfont.truetype(fontpath, size=basesize, encoding='unic')
 
-def preload_rasters(font):
+def preload_rasters(font, size):
     '''
     desc: for each glyph in a font, create a raster for it
     params:
         font = font class from file
+        size = char pixel size
     return: array of char rasters
     '''
 
-    return np.array([rasterize_char(char, font, CHAR_PIXEL_SIZE) for char in ascii_map])
+    return np.array([rasterize_char(char, font, size) for char in ascii_map])
 
-def write_file(frames, fname, fps):
+def write_file(frames, fname, properties):
     '''
     desc: write frames to video
     params:
         frames = list of arrays containing frames of video
         fname = output file name (ext included)
-        fps = fps of output (should be the same as input)
+        properties = video metadata
     return: none (outfile written to fs)
     '''
 
+    res = (properties['width'], properties['height'])
     fourcc = cv.VideoWriter_fourcc(*'mp4v')
-    output = cv.VideoWriter(fname, fourcc, fps, OUTRES[::-1], False)
+    output = cv.VideoWriter(fname, fourcc, properties['fps'], res, False)
     frames_to_write = tqdm(frames, desc='writing frames to file')
 
     for frame in frames_to_write:
@@ -139,8 +136,7 @@ def convert(frames, properties, font, resize=True):
 
     frames_to_convert = tqdm(frames, desc='converting frames')
     new_frames = []
-    charmap = preload_rasters(font)
-
+    charmap = preload_rasters(font, properties['c_pixel_size'])
     c_res = (properties['c_res_y'], properties['c_res_x'])
     res = (properties['height'], properties['width'])
 
@@ -164,4 +160,4 @@ if __name__ == '__main__':
     frames, properties = load_file(sys.argv[1])
     font = get_font(FONTS_PATH+FONT, properties['c_pixel_size'])
     out = convert(frames, properties, font)
-    write_file(out, OUTNAME, properties['fps'])
+    write_file(out, OUTNAME, properties)
