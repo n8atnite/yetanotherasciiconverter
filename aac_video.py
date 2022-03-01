@@ -1,5 +1,8 @@
+from curses import meta
 import sys
 import os
+from tkinter import CHAR
+from xml.sax.handler import property_encoding
 from PIL import Image as im
 from PIL import ImageOps as imops
 from PIL import ImageDraw as imdraw
@@ -14,14 +17,18 @@ ERRORS = {
     "video_read": "Cannot read frame from video stream."
 }
 
+OUTNAME = 'out.mp4'
 FONTS_PATH = '/usr/share/fonts/truetype/ubuntu/'
 FONT = 'Ubuntu-M.ttf'
 VALID_EXTS = ('.mp4', '.m4v', '.avi')
 RES_X = 128
 RES_Y = 72
+CHAR_SCALE = 0.1
 CHAR_PIXEL_SIZE = 10
 OUTRES = (RES_Y*CHAR_PIXEL_SIZE,RES_X*CHAR_PIXEL_SIZE)
 FPS = 24
+
+# https://docs.opencv.org/3.4/d4/d15/group__videoio__flags__base.html#gaeb8dd9c89c10a5c63c139bf7c4f5704d
 
 ascii_map = " .^,:;Il!i~+_-?][}{1)(|/tfjrxnuvczXYUJCLQ0OZmwqpdbkhao*#MW&8%B@$" # revised from https://stackoverflow.com/a/66140774 without escape-chars
 normalize = lambda x: ((x/255)*(len(ascii_map)-1)).astype(np.uint8)
@@ -39,17 +46,18 @@ def preload_rasters(font):
 
     return np.array([rasterize_char(char, font, CHAR_PIXEL_SIZE) for char in ascii_map])
 
-def write_file(frames, fname):
+def write_file(frames, fname, fps):
     '''
     desc: write frames to video
     params:
         frames = list of arrays containing frames of video
         fname = output file name (ext included)
+        fps = fps of output (should be the same as input)
     return: none (outfile written to fs)
     '''
 
     fourcc = cv.VideoWriter_fourcc(*'mp4v')
-    output = cv.VideoWriter(fname, fourcc, FPS, OUTRES[::-1], False)
+    output = cv.VideoWriter(fname, fourcc, fps, OUTRES[::-1], False)
     frames_to_write = tqdm(frames, desc='writing frames to file')
 
     for frame in frames_to_write:
@@ -77,8 +85,21 @@ def load_file(fpath):
             raise ValueError(ERRORS["video_read"])
 
         frames.append(frame)
+
+    properties = {
+        'fps': int(data.get(cv.CAP_PROP_FPS)),
+        'width': int(data.get(cv.CAP_PROP_FRAME_WIDTH)),
+        'height': int(data.get(cv.CAP_PROP_FRAME_HEIGHT)),
+    }
+    metaproperties = {
+        'c_res_x': int(properties['width']*CHAR_SCALE),
+        'c_res_y': int(properties['height']*CHAR_SCALE),
+        'c_pixel_size': properties['width']//int(properties['width']*CHAR_SCALE)
+    }
+    properties.update(metaproperties)
+
     data.release()
-    return frames
+    return frames, properties
 
 def rasterize_char(char, font, size, color=None):
     '''
@@ -105,11 +126,12 @@ def rasterize_char(char, font, size, color=None):
 
     return np.array(canvas)
 
-def convert(frames, font, resize=True):
+def convert(frames, properties, font, resize=True):
     '''
     desc: convert frames to ascii-fied version using a given font
     params:
         frames = array of raw video frames
+        properties = video metadata
         font = font class from file
         resize = whether conversion is done on downscaled version of frames or raw frames' pixels
     return: list of converted frame arrays
@@ -119,14 +141,17 @@ def convert(frames, font, resize=True):
     new_frames = []
     charmap = preload_rasters(font)
 
+    c_res = (properties['c_res_y'], properties['c_res_x'])
+    res = (properties['height'], properties['width'])
+
     for frame in frames_to_convert:
         image_raw = cv.cvtColor(frame, cv.COLOR_BGR2GRAY)
-        image_tmp = cv.resize(image_raw, (RES_X,RES_Y)) if resize else image_raw
+        image_tmp = cv.resize(image_raw, c_res[::-1]) if resize else image_raw
         image = normalize(image_tmp)
 
-        canvas = np.zeros(OUTRES)
+        canvas = np.zeros(res)
         tmp = np.array([charmap[pixel] for row in image for pixel in row])
-        canvas = np.vstack([np.hstack(tmp[i*RES_X:(i+1)*RES_X]) for i in range(RES_Y)])
+        canvas = np.vstack([np.hstack(tmp[i*c_res[1]:(i+1)*c_res[1]]) for i in range(c_res[0])])
 
         new_frames.append(canvas)
 
@@ -136,7 +161,7 @@ if __name__ == '__main__':
     if len(sys.argv) < 2:
         exit("Must provide image path.")
 
-    font = get_font(FONTS_PATH+FONT, CHAR_PIXEL_SIZE)
-    data = load_file(sys.argv[1])
-    out = convert(data, font)
-    write_file(out, 'out.mp4')
+    frames, properties = load_file(sys.argv[1])
+    font = get_font(FONTS_PATH+FONT, properties['c_pixel_size'])
+    out = convert(frames, properties, font)
+    write_file(out, OUTNAME, properties['fps'])
