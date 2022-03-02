@@ -1,7 +1,7 @@
 # yetanotherasciiconverter
 yet another image-to-ASCII-art converter (now with video support!)
 
-I did this as a fun side project only to discover it has been done like a gazillion times. Eh, oh well. I think it turned out nice anyway.
+I did this as a fun side project.
 
 Get better results by increasing contrast, removing the background from the subject, or using simple images/videos.
 
