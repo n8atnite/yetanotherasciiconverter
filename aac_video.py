@@ -1,10 +1,6 @@
-from curses import meta
 import sys
 import os
-from tkinter import CHAR
-from xml.sax.handler import property_encoding
 from PIL import Image as im
-from PIL import ImageOps as imops
 from PIL import ImageDraw as imdraw
 from PIL import ImageFont as imfont
 import cv2 as cv
