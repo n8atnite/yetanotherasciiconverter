@@ -6,9 +6,13 @@ from PIL import ImageFont as imfont
 import cv2 as cv
 import numpy as np
 from tqdm import tqdm
+import argparse
 
 ERRORS = {
     "invalid_ext": "Not a valid file extension.",
+    "invalid_in": "Not a valid input file path.",
+    "invalid_out": "Not a valid output file path.",
+    "invalid_font": "Could not find font from path.",
     "missing_path": "Must provide video path.",
     "video_read": "Cannot read frame from video stream."
 }
@@ -107,7 +111,8 @@ def rasterize_char(char, font, size, color=None):
 
     # TODO: RGB
 
-    width, height = font.getsize(char)
+    left, top, right, bottom = font.getbbox(char)
+    width, height = (right-left), (bottom-top)
     offset = ((size-width)//2, (size-height))
     bg = (0,0,0) if color else 0
     cmode = 'RGB' if color else 'L'
@@ -150,10 +155,31 @@ def convert(frames, properties, font, resize=True):
     return new_frames
 
 if __name__ == '__main__':
-    if len(sys.argv) < 2:
-        exit("Must provide image path.")
+    parser = argparse.ArgumentParser(description='''
+     __    __  ______  ______  ____      
+    /\ \  /\ \/\  _  \/\  _  \/\  _`\    
+    \ `\`\\\/'/\ \ \L\ \ \ \L\ \ \ \/\_\  
+     `\ `\ /'  \ \  __ \ \  __ \ \ \/_/_ 
+       `\ \ \   \ \ \/\ \ \ \/\ \ \ \L\ \\
+         \ \_\   \ \_\ \_\ \_\ \_\ \____/
+          \/_/    \/_/\/_/\/_/\/_/\/___/ 
+                                        
+    Yet Another Ascii Converter by n8atnite
+    convert .mp4 or .avi to asciified .mp4
+    ''', formatter_class=argparse.RawTextHelpFormatter)
+    parser.add_argument('-t', '--fontpath', default=FONTS_PATH+FONT, help='font/typeface filepath (.ttf)')
+    parser.add_argument('inpath', help='full video file path (including name and ext)')
+    parser.add_argument('-o', '--outpath', default='ascii.mp4', help='output video path (including name and .mp4/.mkv ext)')
+    args = parser.parse_args()
 
-    frames, properties = load_file(sys.argv[1])
-    font = get_font(FONTS_PATH+FONT, properties['c_pixel_size'])
+    if not os.path.exists(args.inpath):
+        raise FileNotFoundError(ERRORS["invalid_in"])
+    if not os.path.exists(os.path.split(os.path.abspath(args.outpath))[0]):
+        raise FileNotFoundError(ERRORS["invalid_out"])
+    if not os.path.exists(args.fontpath):
+        raise FileNotFoundError(ERRORS["invalid_font"])
+
+    frames, properties = load_file(args.inpath)
+    font = get_font(args.fontpath, properties['c_pixel_size'])
     out = convert(frames, properties, font)
-    write_file(out, OUTNAME, properties)
+    write_file(out, args.outpath, properties)
