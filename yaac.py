@@ -23,7 +23,7 @@ ERRORS = {
     "video_read": "Cannot read frame from video stream."
 }
 
-PATH = '/home/n8/Videos'
+PATH = None
 CHAR_SCALE = 0.1
 BAR_DELTA = 100
 
