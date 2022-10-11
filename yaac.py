@@ -1,3 +1,4 @@
+from multiprocessing.pool import ThreadPool
 import sys
 import os
 from tkinter import filedialog
@@ -6,12 +7,11 @@ from PIL import ImageDraw as imdraw
 from PIL import ImageFont as imfont
 import cv2 as cv
 import numpy as np
-from tqdm import tqdm
-import argparse
 
 from tkinter import *
 from tkinter import font, ttk, scrolledtext
 from matplotlib import font_manager
+from concurrent.futures import ThreadPoolExecutor, process
 
 BASE_DPI = 72
 SCALE = 1
@@ -25,143 +25,18 @@ ERRORS = {
     "video_read": "Cannot read frame from video stream."
 }
 
-OUTNAME = 'out.mp4'
-FONTS_PATH = '/usr/share/fonts/truetype/ubuntu/'
-FONT = 'Ubuntu-M.ttf'
-VALID_EXTS = ('.mp4', '.m4v', '.avi')
+PATH = None
 CHAR_SCALE = 0.1
+BAR_DELTA = 50
+MAX_WORKERS = 1
+CHUNK_SIZE = 300
 
 # https://docs.opencv.org/3.4/d4/d15/group__videoio__flags__base.html#gaeb8dd9c89c10a5c63c139bf7c4f5704d
 
 ascii_map = " .^,:;Il!i~+_-?][}{1)(|/tfjrxnuvczXYUJCLQ0OZmwqpdbkhao*#MW&8%B@$" # revised from https://stackoverflow.com/a/66140774 without escape-chars
-normalize = lambda x: ((x/255)*(len(ascii_map)-1)).astype(np.uint8)
+normalize = lambda x, amap: ((x/255)*(len(amap)-1)).astype(np.uint8)
 scaled = lambda x: round(x*SCALE)
-
-def get_font(fontpath, basesize):
-    return imfont.truetype(fontpath, size=basesize, encoding='unic')
-
-def preload_rasters(font, size):
-    '''
-    desc: for each glyph in a font, create a raster for it
-    params:
-        font = font class from file
-        size = char pixel size
-    return: array of char rasters
-    '''
-
-    return np.array([rasterize_char(char, font, size) for char in ascii_map])
-
-def write_file(frames, fname, properties):
-    '''
-    desc: write frames to video
-    params:
-        frames = list of arrays containing frames of video
-        fname = output file name (ext included)
-        properties = video metadata
-    return: none (outfile written to fs)
-    '''
-
-    res = (properties['width'], properties['height'])
-    fourcc = cv.VideoWriter_fourcc(*'mp4v')
-    output = cv.VideoWriter(fname, fourcc, properties['fps'], res, False)
-    frames_to_write = tqdm(frames, desc='writing frames to file')
-
-    for frame in frames_to_write:
-        output.write(frame)
-    output.release()
-
-def load_file(fpath):
-    '''
-    desc: load video file
-    params:
-        fpath = absolute path to video file
-    return: array of (raw) frames from video
-    '''
-
-    fname = os.path.basename(fpath)
-    fext = os.path.splitext(fname)[1].lower()
-    frames = []
-    if fext not in VALID_EXTS:
-        raise NotImplementedError(ERRORS["invalid_ext"])
-
-    data = cv.VideoCapture(fpath)
-    for i in range(int(data.get(cv.CAP_PROP_FRAME_COUNT))):
-        ret, frame = data.read()
-        if not ret:
-            raise ValueError(ERRORS["video_read"])
-
-        frames.append(frame)
-
-    properties = {
-        'fps': int(data.get(cv.CAP_PROP_FPS)),
-        'width': int(data.get(cv.CAP_PROP_FRAME_WIDTH)),
-        'height': int(data.get(cv.CAP_PROP_FRAME_HEIGHT)),
-    }
-    metaproperties = {
-        'c_res_x': int(properties['width']*CHAR_SCALE),
-        'c_res_y': int(properties['height']*CHAR_SCALE),
-        'c_pixel_size': properties['width']//int(properties['width']*CHAR_SCALE)
-    }
-    properties.update(metaproperties)
-
-    data.release()
-    return frames, properties
-
-def rasterize_char(char, font, size, color=None):
-    '''
-    desc: rasterize a character or "glyph" from a font as a (size x size) array
-    params:
-        char = single-char string, must exist in font's glyphmap
-        font = loaded font class from file
-        size = width & height of char raster, in pixels
-        color = TODO
-    return: raster as array
-    '''
-
-    # TODO: RGB
-
-    left, top, right, bottom = font.getbbox(char)
-    width, height = (right-left), (bottom-top)
-    offset = ((size-width)//2, (size-height))
-    bg = (0,0,0) if color else 0
-    cmode = 'RGB' if color else 'L'
-    fill = color if color else 255
-
-    canvas = im.new(cmode, (size,size), color=bg)
-    drawn = imdraw.Draw(canvas)
-    drawn.text(offset, char, font=font, fill=fill)
-
-    return np.array(canvas)
-
-def convert(frames, properties, font, resize=True):
-    '''
-    desc: convert frames to ascii-fied version using a given font
-    params:
-        frames = array of raw video frames
-        properties = video metadata
-        font = font class from file
-        resize = whether conversion is done on downscaled version of frames or raw frames' pixels
-    return: list of converted frame arrays
-    '''
-
-    frames_to_convert = tqdm(frames, desc='converting frames')
-    new_frames = []
-    charmap = preload_rasters(font, properties['c_pixel_size'])
-    c_res = (properties['c_res_y'], properties['c_res_x'])
-    res = (properties['height'], properties['width'])
-
-    for frame in frames_to_convert:
-        image_raw = cv.cvtColor(frame, cv.COLOR_BGR2GRAY)
-        image_tmp = cv.resize(image_raw, c_res[::-1]) if resize else image_raw
-        image = normalize(image_tmp)
-
-        canvas = np.zeros(res)
-        tmp = np.array([charmap[pixel] for row in image for pixel in row])
-        canvas = np.vstack([np.hstack(tmp[i*c_res[1]:(i+1)*c_res[1]]) for i in range(c_res[0])])
-
-        new_frames.append(canvas)
-
-    return new_frames
+round_to_multiple = lambda m,n: m*round(n/m)
 
 def load_style():
     style = ttk.Style()
@@ -233,39 +108,198 @@ class FileExplorer:
             ("matroska", "*.mkv"), 
             ("avi", "*.avi")
         ) if isInput else (("mp4", "*.mp4"),)
-        self.filename = ''
+        self.path = None
 
     def browse(self):
         name = self.opencontext(
             title=self.title, 
-            filetypes=self.types
+            filetypes=self.types,
+            initialdir='.' if not PATH else PATH
         )
         self.dialog.configure(text=name)
+        self.path = name
+
+class AsciiMenu:
+    def __init__(self, menu, label):
+        self.menu = menu
+        self.label = label
+        self.map = self.menu.get()
+
+    def update_map(self):
+        self.map = self.menu.get()
+
+class Converter:
+    def __init__(self, button, pbar, label):
+        self.button = button
+        self.pbar = pbar
+        self.label = label
+
+    def get_font(self, path, basesize):
+        return imfont.truetype(path, size=basesize, encoding='unic')
+
+    def preload_rasters(self, font, asciimap, size):
+        '''
+        desc: for each glyph in a font, create a raster for it
+        params:
+            font = font class from file
+            size = char pixel size
+        return: array of char rasters
+        '''
+
+        return np.array([self.rasterize_char(char, font, size) for char in asciimap])
+
+    def write_file(self, frames, fname, properties):
+        '''
+        desc: write frames to video
+        params:
+            frames = list of arrays containing frames of video
+            fname = output file name (ext included)
+            properties = video metadata
+        return: none (outfile written to fs)
+        '''
+
+        self.label.configure(text="writing to file...")
+
+        res = (properties['width'], properties['height'])
+        fourcc = cv.VideoWriter_fourcc(*'mp4v')
+        output = cv.VideoWriter(fname, fourcc, properties['fps'], res, False)
+
+        for i, frame in enumerate(frames):
+            output.write(frame)
+            if i%BAR_DELTA == 0:
+                self.pbar.step(BAR_DELTA)
+                self.pbar.update()
+        output.release()
+
+    def load_file(self, fpath):
+        '''
+        desc: load video file
+        params:
+            fpath = absolute path to video file
+        return: array of (raw) frames from video
+        '''
+
+        fname = os.path.basename(fpath)
+        fext = os.path.splitext(fname)[1].lower()
+        frames = []
+
+        data = cv.VideoCapture(fpath)
+        for i in range(int(data.get(cv.CAP_PROP_FRAME_COUNT))):
+            ret, frame = data.read()
+            if not ret:
+                raise ValueError(ERRORS["video_read"])
+
+            frames.append(frame)
+
+        properties = {
+            'fps': int(data.get(cv.CAP_PROP_FPS)),
+            'width': int(data.get(cv.CAP_PROP_FRAME_WIDTH)),
+            'height': int(data.get(cv.CAP_PROP_FRAME_HEIGHT)),
+        }
+        metaproperties = {
+            'c_res_x': int(properties['width']*CHAR_SCALE),
+            'c_res_y': int(properties['height']*CHAR_SCALE),
+            'c_pixel_size': properties['width']//int(properties['width']*CHAR_SCALE)
+        }
+        properties.update(metaproperties)
+
+        data.release()
+        return frames, properties
+
+    def rasterize_char(self, char, font, size, color=None):
+        '''
+        desc: rasterize a character or "glyph" from a font as a (size x size) array
+        params:
+            char = single-char string, must exist in font's glyphmap
+            font = loaded font class from file
+            size = width & height of char raster, in pixels
+            color = TODO
+        return: raster as array
+        '''
+
+        # TODO: RGB
+
+        left, top, right, bottom = font.getbbox(char)
+        width, height = (right-left), (bottom-top)
+        offset = ((size-width)//2, (size-height))
+        bg = (0,0,0) if color else 0
+        cmode = 'RGB' if color else 'L'
+        fill = color if color else 255
+
+        canvas = im.new(cmode, (size,size), color=bg)
+        drawn = imdraw.Draw(canvas)
+        drawn.text(offset, char, font=font, fill=fill)
+
+        return np.array(canvas)
+
+    def convert(self, frames, properties, font, asciimap, resize=True):
+        '''
+        desc: convert frames to ascii-fied version using a given font
+        params:
+            frames = array of raw video frames
+            properties = video metadata
+            font = font class from file
+            resize = whether conversion is done on downscaled version of frames or raw frames' pixels
+        return: list of converted frame arrays
+        '''
+
+        self.label.configure(text="converting...")
+
+        new_frames = []
+        charmap = self.preload_rasters(font, asciimap, properties['c_pixel_size'])
+        c_res = (properties['c_res_y'], properties['c_res_x'])
+        res = (properties['height'], properties['width'])
+
+        def process_frames(frames):
+            new = []
+            for frame in frames:
+                image_raw = cv.cvtColor(frame, cv.COLOR_BGR2GRAY)
+                image_tmp = cv.resize(image_raw, c_res[::-1]) if resize else image_raw
+                image = normalize(image_tmp, asciimap)
+
+                canvas = np.zeros(res)
+                tmp = np.array([charmap[pixel] for row in image for pixel in row])
+                canvas = np.vstack([np.hstack(tmp[i*c_res[1]:(i+1)*c_res[1]]) for i in range(c_res[0])])
+
+                new.append(canvas)
+                # if i%BAR_DELTA == 0:
+                #     self.pbar.step(BAR_DELTA)
+                #     self.pbar.update()
+            return new
+
+        with ThreadPoolExecutor(max_workers=MAX_WORKERS) as exe:
+            for i in exe.map(process_frames, frames):
+                new_frames.append(i)
+                self.pbar.step(len(i))
+                self.pbar.update()
+
+        return new_frames
+
+    def run(self, inpath, outpath, fontpath, asciimap):
+        if not inpath:
+            return print("ERROR: no input path provided")
+        if not outpath:
+            return print("ERROR: no output path provided")
+        if not fontpath:
+            return print("ERROR: no font path provided")
+        if len(asciimap) < 2:
+            return print("ERROR: ASCII map has too few values")
+
+        frames, properties = self.load_file(inpath) 
+        self.reset_pbar(frames)
+        font = self.get_font(fontpath, properties['c_pixel_size']) 
+        out = self.convert(frames, properties, font, asciimap)
+        self.write_file(out, outpath, properties) 
+        self.label.configure(text="done")
+
+    def reset_pbar(self, frames):
+        self.pbar['value'] = 0
+        self.pbar.configure(maximum=2*len(frames))
+        self.pbar.update()
 
 if __name__ == '__main__':
-    # parser = argparse.ArgumentParser(description='''
-    #  __    __  ______  ______  ____      
-    # /\ \  /\ \/\  _  \/\  _  \/\  _`\    
-    # \ `\`\\\/'/\ \ \L\ \ \ \L\ \ \ \/\_\  
-    #  `\ `\ /'  \ \  __ \ \  __ \ \ \/_/_ 
-    #    `\ \ \   \ \ \/\ \ \ \/\ \ \ \L\ \\
-    #      \ \_\   \ \_\ \_\ \_\ \_\ \____/
-    #       \/_/    \/_/\/_/\/_/\/_/\/___/ 
-                                        
-    # Yet Another Ascii Converter by n8atnite
-    # convert .mp4 or .avi to asciified .mp4
-    # ''', formatter_class=argparse.RawTextHelpFormatter)
-    # parser.add_argument('-t', '--fontpath', default=FONTS_PATH+FONT, help='font/typeface filepath (.ttf)')
-    # parser.add_argument('inpath', help='full video file path (including name and ext)')
-    # parser.add_argument('-o', '--outpath', default='ascii.mp4', help='output video path (including name and .mp4/.mkv ext)')
-    # args = parser.parse_args()
-
-    # if not os.path.exists(args.inpath):
-    #     raise FileNotFoundError(ERRORS["invalid_in"])
-    # if not os.path.exists(os.path.split(os.path.abspath(args.outpath))[0]):
-    #     raise FileNotFoundError(ERRORS["invalid_out"])
-    # if not os.path.exists(args.fontpath):
-    #     raise FileNotFoundError(ERRORS["invalid_font"])
+    if len(sys.argv) > 1:
+        PATH = sys.argv[1]
 
     root = Tk()
     style = load_style()
@@ -277,12 +311,15 @@ if __name__ == '__main__':
     root.title('YAAC')
     root.pack_propagate(0)
     root.focus()
-    root.geometry(str(scaled(800)) + "x" + str(scaled(600)+7) + "+" + str(-7) + "+" + str(0))
+    root.geometry(str(scaled(700)) + "x" + str(scaled(200)+7) + "+" + str(-7) + "+" + str(0))
+    root.rowconfigure(1, weight=1)
+    root.columnconfigure(1, weight=1)
+    root.resizable(False, False)
 
     # FONT MENU
     fontFamilies = sorted(list(font.families()))
     fontMenuVar = StringVar(root)
-    fontMenuVar.set(fontFamilies[0])
+    fontMenuVar.set(font.nametofont("TkDefaultFont").actual()['family'])
     fontMenuBox = ttk.Combobox(
         root, 
         textvariable=fontMenuVar, 
@@ -294,13 +331,26 @@ if __name__ == '__main__':
     fontMenu = FontMenu(fontMenuBox, fontMenuLabel)
 
     # FILE IO
-    inputDialogText = Label(root, background='white', text="", height=1, font=elementFont)
+    inputDialogText = Label(root, background='white', text="", height=1, width=50, font=elementFont)
     inputDialogButton = Button(root, text="<- load file")
     inputDialog = FileExplorer(inputDialogText, inputDialogButton, isInput=True)
 
-    outputDialogText = Label(root, background='white', text="", height=1, font=elementFont)
+    outputDialogText = Label(root, background='white', text="", height=1, width=50, font=elementFont)
     outputDialogButton = Button(root, text="<- save as")    
     outputDialog = FileExplorer(outputDialogText, outputDialogButton, isInput=False)
+
+    # ASCII SETTINGS
+    asciiMenuEntryVar = StringVar(root)
+    asciiMenuEntryVar.set(ascii_map)
+    asciiMenuLabel = Label(root, text="ASCII range", font=rootFont)
+    asciiMenuEntry = Entry(root, text=asciiMenuEntryVar)
+    asciiMenu = AsciiMenu(asciiMenuEntry, asciiMenuLabel)
+
+    # ACTION
+    actionMenuButton = Button(root, background='green', foreground='white', text='START')
+    actionMenuPBar = ttk.Progressbar(root, orient='horizontal')
+    actionMenuLabel = Label(root, text="", font=elementFont)
+    actionMenu = Converter(actionMenuButton, actionMenuPBar, actionMenuLabel)
 
     # CONSOLE LOG
     consoleBox = scrolledtext.ScrolledText(root, height=4, font=elementFont)
@@ -309,22 +359,24 @@ if __name__ == '__main__':
     sys.stdout = log
 
     # LAYOUT
-    inputDialog.dialog.grid(row=0, column=0, sticky='ew')
-    inputDialog.button.grid(row=0, column=1, sticky='w')
-    outputDialog.dialog.grid(row=1, column=0, sticky='ew')
-    outputDialog.button.grid(row=1, column=1, sticky='w')
+    inputDialog.dialog.grid(row=0, column=0, sticky='new')
+    inputDialog.button.grid(row=0, column=1, sticky='nw')
+    outputDialog.dialog.grid(row=1, column=0, sticky='new')
+    outputDialog.button.grid(row=1, column=1, sticky='nw')
     fontMenu.label.grid(row=0, column=2, sticky='ne')
     fontMenu.menu.grid(row=1, column=2, sticky='ne')
-    log.label.grid(row=3, column=0, sticky='sw')
-    log.textbox.grid(row=4, column=0, columnspan=3, sticky='s')
+    asciiMenu.label.grid(row=2, column=0, sticky='w')
+    asciiMenu.menu.grid(row=3, column=0, columnspan=2, sticky='ew')
+    actionMenu.button.grid(row=3, column=2, sticky='e')
+    actionMenu.pbar.grid(row=4, column=0, columnspan=2, sticky='ew')
+    actionMenu.label.grid(row=4, column=2, sticky='w')
+    log.label.grid(row=5, column=0, sticky='sw')
+    log.textbox.grid(row=6, column=0, columnspan=3, sticky='s')
 
     fontMenu.menu.bind("<<ComboboxSelected>>", lambda _: fontMenu.assign_font())
     inputDialog.button.configure(command=inputDialog.browse)
     outputDialog.button.configure(command=outputDialog.browse)
-
-    # frames, properties = load_file(args.inpath) -> inputDialog.filename
-    # font = get_font(args.fontpath, properties['c_pixel_size']) -> fontMenu.path,
-    # out = convert(frames, properties, font)
-    # write_file(out, args.outpath, properties) -> outputDialog.filename
+    asciiMenu.menu.bind("<FocusOut>", lambda _: asciiMenu.update_map())
+    actionMenu.button.configure(command=lambda: actionMenu.run(inputDialog.path, outputDialog.path, fontMenu.path, asciiMenu.map))
 
     root.mainloop()
