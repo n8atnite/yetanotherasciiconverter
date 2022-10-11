@@ -25,11 +25,9 @@ ERRORS = {
     "video_read": "Cannot read frame from video stream."
 }
 
-PATH = None
+PATH = '/home/n8/Videos'
 CHAR_SCALE = 0.1
-BAR_DELTA = 50
-MAX_WORKERS = 1
-CHUNK_SIZE = 300
+BAR_DELTA = 100
 
 # https://docs.opencv.org/3.4/d4/d15/group__videoio__flags__base.html#gaeb8dd9c89c10a5c63c139bf7c4f5704d
 
@@ -250,27 +248,18 @@ class Converter:
         c_res = (properties['c_res_y'], properties['c_res_x'])
         res = (properties['height'], properties['width'])
 
-        def process_frames(frames):
-            new = []
-            for frame in frames:
-                image_raw = cv.cvtColor(frame, cv.COLOR_BGR2GRAY)
-                image_tmp = cv.resize(image_raw, c_res[::-1]) if resize else image_raw
-                image = normalize(image_tmp, asciimap)
+        for i, frame in enumerate(frames):
+            image_raw = cv.cvtColor(frame, cv.COLOR_BGR2GRAY)
+            image_tmp = cv.resize(image_raw, c_res[::-1]) if resize else image_raw
+            image = normalize(image_tmp, asciimap)
 
-                canvas = np.zeros(res)
-                tmp = np.array([charmap[pixel] for row in image for pixel in row])
-                canvas = np.vstack([np.hstack(tmp[i*c_res[1]:(i+1)*c_res[1]]) for i in range(c_res[0])])
+            canvas = np.zeros(res)
+            tmp = np.array([charmap[pixel] for row in image for pixel in row])
+            canvas = np.vstack([np.hstack(tmp[i*c_res[1]:(i+1)*c_res[1]]) for i in range(c_res[0])])
 
-                new.append(canvas)
-                # if i%BAR_DELTA == 0:
-                #     self.pbar.step(BAR_DELTA)
-                #     self.pbar.update()
-            return new
-
-        with ThreadPoolExecutor(max_workers=MAX_WORKERS) as exe:
-            for i in exe.map(process_frames, frames):
-                new_frames.append(i)
-                self.pbar.step(len(i))
+            new_frames.append(canvas)
+            if i%BAR_DELTA == 0:
+                self.pbar.step(BAR_DELTA)
                 self.pbar.update()
 
         return new_frames
@@ -294,7 +283,7 @@ class Converter:
 
     def reset_pbar(self, frames):
         self.pbar['value'] = 0
-        self.pbar.configure(maximum=2*len(frames))
+        self.pbar.configure(maximum=round_to_multiple(BAR_DELTA, 2*len(frames)+BAR_DELTA))
         self.pbar.update()
 
 if __name__ == '__main__':
