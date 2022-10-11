@@ -1,4 +1,3 @@
-from multiprocessing.pool import ThreadPool
 import sys
 import os
 from tkinter import filedialog
@@ -11,7 +10,6 @@ import numpy as np
 from tkinter import *
 from tkinter import font, ttk, scrolledtext
 from matplotlib import font_manager
-from concurrent.futures import ThreadPoolExecutor, process
 
 BASE_DPI = 72
 SCALE = 1
