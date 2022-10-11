@@ -1,5 +1,6 @@
 import sys
 import os
+from tkinter import filedialog
 from PIL import Image as im
 from PIL import ImageDraw as imdraw
 from PIL import ImageFont as imfont
@@ -9,7 +10,7 @@ from tqdm import tqdm
 import argparse
 
 from tkinter import *
-from tkinter import font, ttk
+from tkinter import font, ttk, scrolledtext
 from matplotlib import font_manager
 
 BASE_DPI = 72
@@ -34,6 +35,7 @@ CHAR_SCALE = 0.1
 
 ascii_map = " .^,:;Il!i~+_-?][}{1)(|/tfjrxnuvczXYUJCLQ0OZmwqpdbkhao*#MW&8%B@$" # revised from https://stackoverflow.com/a/66140774 without escape-chars
 normalize = lambda x: ((x/255)*(len(ascii_map)-1)).astype(np.uint8)
+scaled = lambda x: round(x*SCALE)
 
 def get_font(fontpath, basesize):
     return imfont.truetype(fontpath, size=basesize, encoding='unic')
@@ -161,23 +163,6 @@ def convert(frames, properties, font, resize=True):
 
     return new_frames
 
-def scaled(width):
-    return round(width*SCALE)
-
-def filter_font_props(props):
-    accepted = ('family', 'slant', 'size', 'weight')
-    filtered = {}
-    for key, value in props.items():
-        if key in accepted:
-            if key == 'slant':
-                if value == 'roman':
-                    filtered['style'] = 'normal'
-                else:
-                    filtered['style'] = value
-            else:
-                filtered[key] = value
-    return filtered
-
 def load_style():
     style = ttk.Style()
     style_settings = (
@@ -196,16 +181,66 @@ def load_style():
 
     return style
 
-class PrintLogger(): # create file like object
-    def __init__(self, textbox): # pass reference to text widget
-        self.textbox = textbox # keep ref
+class Console:
+    def __init__(self, textbox, label):
+        self.textbox = textbox
+        self.label = label
 
     def write(self, text):
-        self.textbox.insert(END, text) # write text to textbox
-            # could also scroll to end of textbox here to make sure always visible
+        self.textbox.insert(END, text)
 
-    def flush(self): # needed for file like object
+    def flush(self):
         pass
+
+class FontMenu:
+    def __init__(self, menu, label):
+        self.menu = menu
+        self.label = label
+        self.path = self.find_fontpath_from_props(font.Font(font=self.menu['font']).actual())
+    
+    def assign_font(self):
+        self.menu.configure(font=font.Font(family=self.menu.get(), size=14)),
+        self.path = self.find_fontpath_from_props(font.Font(font=self.menu['font']).actual())
+
+    def find_fontpath_from_props(self, props):
+        accepted = ('family', 'slant', 'size', 'weight')
+        filtered = {}
+        for key, value in props.items():
+            if key in accepted:
+                if key == 'slant':
+                    if value == 'roman':
+                        filtered['style'] = 'normal'
+                    else:
+                        filtered['style'] = value
+                else:
+                    filtered[key] = value
+        new_props = font_manager.FontProperties(**filtered)
+        try:
+            path = font_manager.findfont(new_props, fallback_to_default=False)
+        except ValueError:
+            print("ERROR: font path not found for %s" % props['family'])
+            return None
+        return path
+
+class FileExplorer:
+    def __init__(self, dialog, button, isInput=True):
+        self.dialog = dialog
+        self.button = button
+        self.opencontext = filedialog.askopenfilename if isInput else filedialog.asksaveasfilename
+        self.title = "LOAD FILE" if isInput else "SAVE FILE"
+        self.types = (
+            ("mp4", "*.mp4"), 
+            ("matroska", "*.mkv"), 
+            ("avi", "*.avi")
+        ) if isInput else (("mp4", "*.mp4"),)
+        self.filename = ''
+
+    def browse(self):
+        name = self.opencontext(
+            title=self.title, 
+            filetypes=self.types
+        )
+        self.dialog.configure(text=name)
 
 if __name__ == '__main__':
     # parser = argparse.ArgumentParser(description='''
@@ -235,44 +270,61 @@ if __name__ == '__main__':
     root = Tk()
     style = load_style()
     SCALE = root.winfo_fpixels('1i')/BASE_DPI
-    rootFont = font.Font(family='TkDefaultFont', size=24)
+    rootFont = font.Font(family='TkDefaultFont', size=18)
+    elementFont = font.Font(family='TkDefaultFont', size=14)
 
+    # ROOT PROPERTIES
     root.title('YAAC')
     root.pack_propagate(0)
     root.focus()
     root.geometry(str(scaled(800)) + "x" + str(scaled(600)+7) + "+" + str(-7) + "+" + str(0))
 
+    # FONT MENU
     fontFamilies = sorted(list(font.families()))
     fontMenuVar = StringVar(root)
     fontMenuVar.set(fontFamilies[0])
-    fontMenu = ttk.Combobox(
+    fontMenuBox = ttk.Combobox(
         root, 
         textvariable=fontMenuVar, 
         values=fontFamilies, 
-        font=rootFont, 
+        font=elementFont, 
         style='font.TCombobox',
     )
-    fontMenu.pack()
+    fontMenuLabel = Label(root, text="Font", font=rootFont)
+    fontMenu = FontMenu(fontMenuBox, fontMenuLabel)
 
-    consoleBox = Text()
-    consoleBox.pack()
-    log = PrintLogger(consoleBox)
+    # FILE IO
+    inputDialogText = Label(root, background='white', text="", height=1, font=elementFont)
+    inputDialogButton = Button(root, text="<- load file")
+    inputDialog = FileExplorer(inputDialogText, inputDialogButton, isInput=True)
+
+    outputDialogText = Label(root, background='white', text="", height=1, font=elementFont)
+    outputDialogButton = Button(root, text="<- save as")    
+    outputDialog = FileExplorer(outputDialogText, outputDialogButton, isInput=False)
+
+    # CONSOLE LOG
+    consoleBox = scrolledtext.ScrolledText(root, height=4, font=elementFont)
+    consoleBoxLabel = Label(root, text="Log", font=rootFont)
+    log = Console(consoleBox, consoleBoxLabel)
     sys.stdout = log
 
-    def report_font(*args):
-        fontMenu.configure(font=font.Font(family=fontMenu.get(), size=24))
-        p = font_manager.FontProperties(**filter_font_props(font.Font(font=fontMenu['font']).actual()))
-        try:
-            path = font_manager.findfont(p, fallback_to_default=False)
-        except ValueError:
-            path = "ERROR: FONT PATH NOT FOUND"
-        print(path)
+    # LAYOUT
+    inputDialog.dialog.grid(row=0, column=0, sticky='ew')
+    inputDialog.button.grid(row=0, column=1, sticky='w')
+    outputDialog.dialog.grid(row=1, column=0, sticky='ew')
+    outputDialog.button.grid(row=1, column=1, sticky='w')
+    fontMenu.label.grid(row=0, column=2, sticky='ne')
+    fontMenu.menu.grid(row=1, column=2, sticky='ne')
+    log.label.grid(row=3, column=0, sticky='sw')
+    log.textbox.grid(row=4, column=0, columnspan=3, sticky='s')
 
-    fontMenu.bind("<<ComboboxSelected>>", report_font)
+    fontMenu.menu.bind("<<ComboboxSelected>>", lambda _: fontMenu.assign_font())
+    inputDialog.button.configure(command=inputDialog.browse)
+    outputDialog.button.configure(command=outputDialog.browse)
 
-    # frames, properties = load_file(args.inpath)
-    # font = get_font(args.fontpath, properties['c_pixel_size'])
+    # frames, properties = load_file(args.inpath) -> inputDialog.filename
+    # font = get_font(args.fontpath, properties['c_pixel_size']) -> fontMenu.path,
     # out = convert(frames, properties, font)
-    # write_file(out, args.outpath, properties)
+    # write_file(out, args.outpath, properties) -> outputDialog.filename
 
     root.mainloop()
