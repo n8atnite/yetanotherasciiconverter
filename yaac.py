@@ -1,14 +1,20 @@
+# utils
 import sys
 import os
-from tkinter import filedialog
+import threading
+from concurrent.futures import ThreadPoolExecutor
+from queue import Queue
+
+# matrices and image processing
 from PIL import Image as im
 from PIL import ImageDraw as imdraw
 from PIL import ImageFont as imfont
 import cv2 as cv
 import numpy as np
 
+# UI
 from tkinter import *
-from tkinter import font, ttk, scrolledtext
+from tkinter import font, ttk, scrolledtext, filedialog
 from matplotlib import font_manager
 
 BASE_DPI = 72
@@ -23,7 +29,7 @@ ERRORS = {
     "video_read": "Cannot read frame from video stream."
 }
 
-PATH = None
+PATH = '/home/n8/Videos'
 CHAR_SCALE = 0.1
 BAR_DELTA = 100
 
@@ -128,7 +134,10 @@ class Converter:
     def __init__(self, button, pbar, label):
         self.button = button
         self.pbar = pbar
+        self.steps = 0
         self.label = label
+        self.frame_queue = Queue(maxsize=25)
+        self.converted_queue = Queue(maxsize=25)
 
     def get_font(self, path, basesize):
         return imfont.truetype(path, size=basesize, encoding='unic')
@@ -144,63 +153,35 @@ class Converter:
 
         return np.array([self.rasterize_char(char, font, size) for char in asciimap])
 
-    def write_file(self, frames, fname, properties):
-        '''
-        desc: write frames to video
-        params:
-            frames = list of arrays containing frames of video
-            fname = output file name (ext included)
-            properties = video metadata
-        return: none (outfile written to fs)
-        '''
+    def write_frames(self, output, properties):
+        for _ in range(properties['framecount']):
+            output.write(self.converted_queue.get())
+            self.steps += 1
 
-        self.label.configure(text="writing to file...")
-
-        res = (properties['width'], properties['height'])
-        fourcc = cv.VideoWriter_fourcc(*'mp4v')
-        output = cv.VideoWriter(fname, fourcc, properties['fps'], res, False)
-
-        for i, frame in enumerate(frames):
-            output.write(frame)
-            if i%BAR_DELTA == 0:
-                self.pbar.step(BAR_DELTA)
-                self.pbar.update()
-        output.release()
-
-    def load_file(self, fpath):
-        '''
-        desc: load video file
-        params:
-            fpath = absolute path to video file
-        return: array of (raw) frames from video
-        '''
-
-        fname = os.path.basename(fpath)
-        fext = os.path.splitext(fname)[1].lower()
-        frames = []
-
-        data = cv.VideoCapture(fpath)
+    def read_frames(self, data):
         for i in range(int(data.get(cv.CAP_PROP_FRAME_COUNT))):
             ret, frame = data.read()
             if not ret:
                 raise ValueError(ERRORS["video_read"])
+            self.frame_queue.put(frame)
 
-            frames.append(frame)
+    def convert_frames(self, properties, font, asciimap):
+        charmap = self.preload_rasters(font, asciimap, properties['c_pixel_size'])
+        c_res = (properties['c_res_y'], properties['c_res_x'])
+        res = (properties['height'], properties['width'])
 
-        properties = {
-            'fps': int(data.get(cv.CAP_PROP_FPS)),
-            'width': int(data.get(cv.CAP_PROP_FRAME_WIDTH)),
-            'height': int(data.get(cv.CAP_PROP_FRAME_HEIGHT)),
-        }
-        metaproperties = {
-            'c_res_x': int(properties['width']*CHAR_SCALE),
-            'c_res_y': int(properties['height']*CHAR_SCALE),
-            'c_pixel_size': properties['width']//int(properties['width']*CHAR_SCALE)
-        }
-        properties.update(metaproperties)
+        for _ in range(properties['framecount']):
+            frame = self.frame_queue.get()
+            
+            image_raw = cv.cvtColor(frame, cv.COLOR_BGR2GRAY)
+            image_tmp = cv.resize(image_raw, c_res[::-1])
+            image = normalize(image_tmp, asciimap)
 
-        data.release()
-        return frames, properties
+            canvas = np.zeros(res)
+            tmp = np.array([charmap[pixel] for row in image for pixel in row])
+            canvas = np.vstack([np.hstack(tmp[i*c_res[1]:(i+1)*c_res[1]]) for i in range(c_res[0])])
+
+            self.converted_queue.put(canvas)
 
     def rasterize_char(self, char, font, size, color=None):
         '''
@@ -228,40 +209,6 @@ class Converter:
 
         return np.array(canvas)
 
-    def convert(self, frames, properties, font, asciimap, resize=True):
-        '''
-        desc: convert frames to ascii-fied version using a given font
-        params:
-            frames = array of raw video frames
-            properties = video metadata
-            font = font class from file
-            resize = whether conversion is done on downscaled version of frames or raw frames' pixels
-        return: list of converted frame arrays
-        '''
-
-        self.label.configure(text="converting...")
-
-        new_frames = []
-        charmap = self.preload_rasters(font, asciimap, properties['c_pixel_size'])
-        c_res = (properties['c_res_y'], properties['c_res_x'])
-        res = (properties['height'], properties['width'])
-
-        for i, frame in enumerate(frames):
-            image_raw = cv.cvtColor(frame, cv.COLOR_BGR2GRAY)
-            image_tmp = cv.resize(image_raw, c_res[::-1]) if resize else image_raw
-            image = normalize(image_tmp, asciimap)
-
-            canvas = np.zeros(res)
-            tmp = np.array([charmap[pixel] for row in image for pixel in row])
-            canvas = np.vstack([np.hstack(tmp[i*c_res[1]:(i+1)*c_res[1]]) for i in range(c_res[0])])
-
-            new_frames.append(canvas)
-            if i%BAR_DELTA == 0:
-                self.pbar.step(BAR_DELTA)
-                self.pbar.update()
-
-        return new_frames
-
     def run(self, inpath, outpath, fontpath, asciimap):
         if not inpath:
             return print("ERROR: no input path provided")
@@ -272,16 +219,54 @@ class Converter:
         if len(asciimap) < 2:
             return print("ERROR: ASCII map has too few values")
 
-        frames, properties = self.load_file(inpath) 
-        self.reset_pbar(frames)
-        font = self.get_font(fontpath, properties['c_pixel_size']) 
-        out = self.convert(frames, properties, font, asciimap)
-        self.write_file(out, outpath, properties) 
-        self.label.configure(text="done")
+        data = cv.VideoCapture(inpath)
+        properties = {
+            'fps': int(data.get(cv.CAP_PROP_FPS)),
+            'width': int(data.get(cv.CAP_PROP_FRAME_WIDTH)),
+            'height': int(data.get(cv.CAP_PROP_FRAME_HEIGHT)),
+            'framecount': int(data.get(cv.CAP_PROP_FRAME_COUNT))
+        }
+        properties.update({
+            'c_res_x': int(properties['width']*CHAR_SCALE),
+            'c_res_y': int(properties['height']*CHAR_SCALE),
+            'c_pixel_size': properties['width']//int(properties['width']*CHAR_SCALE)
+        })
+        fourcc = cv.VideoWriter_fourcc(*'mp4v')
+        output = cv.VideoWriter(outpath, fourcc, properties['fps'], (properties['width'], properties['height']), False)
 
-    def reset_pbar(self, frames):
+        self.label.configure(text="converting...")
+        self.reset(properties['framecount'])
+
+        loader, converter, writer = (
+            threading.Thread(target=self.read_frames, args=(data,)),
+            threading.Thread(target=self.convert_frames, args=(properties, self.get_font(fontpath, properties['c_pixel_size']), asciimap)),
+            threading.Thread(target=self.write_frames, args=(output, properties))
+        )
+        loader.start()
+        converter.start()
+        writer.start()
+        while writer.is_alive():
+            self.update_pbar()
+
+        data.release()
+        output.release()
+        loader.join()
+        converter.join()
+        writer.join()
+
+        self.label.configure(text="done")
+        self.pbar.step(-(properties['framecount']))
+        self.reset()
+
+    def reset(self, framecount=None):
+        if framecount:
+            self.pbar.configure(maximum=framecount)
         self.pbar['value'] = 0
-        self.pbar.configure(maximum=round_to_multiple(BAR_DELTA, 2*len(frames)+BAR_DELTA))
+        self.pbar.update()
+        self.converted = []
+
+    def update_pbar(self):
+        self.pbar['value'] = self.steps
         self.pbar.update()
 
 if __name__ == '__main__':
